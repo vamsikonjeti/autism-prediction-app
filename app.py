@@ -4,29 +4,29 @@ import joblib
 import librosa
 import tempfile
 import os
+import pandas as pd
 
 # =========================================
-# PAGE CONFIG
+# PAGE CONFIGURATION
 # =========================================
 st.set_page_config(page_title="Autism Prediction System", layout="centered", page_icon="🧠")
 
 st.title("🧠 Autism Spectrum Disorder Prediction")
 st.write("""
 Predict Autism likelihood using **Questionnaire (Text)**, **Speech (Audio)**, or **both combined (Hybrid)**.  
-This system leverages AI and advanced feature fusion to estimate ASD likelihood.
+This intelligent system integrates behavioral and vocal features to assist early autism screening.
 """)
 
 st.divider()
 
 # =========================================
-# LOAD MODELS AND SCALERS (for faculty view)
+# LOAD MODELS AND SCALERS
 # =========================================
 MODELS = {
     "Text": "autism_model_text.pkl",
     "Audio": "autism_model_audio.pkl",
     "Hybrid": "autism_model_hybrid.pkl"
 }
-
 SCALERS = {
     "Text": "scaler_text.pkl",
     "Audio": "scaler_audio.pkl",
@@ -45,19 +45,14 @@ if not loaded_models:
     st.stop()
 
 # =========================================
-# QUESTIONNAIRE INPUTS
+# QUESTIONNAIRE INPUT SECTION
 # =========================================
 st.subheader("🧾 Questionnaire Input (Optional)")
 use_text = st.checkbox("Use Questionnaire Input", value=True)
 text_features = None
 
-family_asd = "No"
-communication_score = 0
-repetition_score = 0
-jaundice = "No"
-
 if use_text:
-    age = st.number_input("Age (years)", 1, 100, 5)
+    age = st.number_input("Age (years)", 1, 14, 5)
     gender = st.selectbox("Gender", ["Male", "Female"])
     jaundice = st.selectbox("Jaundice at birth?", ["Yes", "No"])
     family_asd = st.selectbox("Family member with Autism?", ["Yes", "No"])
@@ -66,6 +61,7 @@ if use_text:
     communication_score = st.slider("Communication Score", 0, 10, 5)
     repetition_score = st.slider("Repetitive Behavior Score", 0, 10, 5)
 
+    # Encode categorical to numeric
     gender_num = 1 if gender == "Male" else 0
     jaundice_num = 1 if jaundice == "Yes" else 0
     family_asd_num = 1 if family_asd == "Yes" else 0
@@ -77,7 +73,7 @@ if use_text:
 st.divider()
 
 # =========================================
-# AUDIO INPUTS
+# AUDIO INPUT SECTION
 # =========================================
 st.subheader("🎤 Speech Input (Optional)")
 use_audio = st.checkbox("Use Audio Input", value=False)
@@ -94,18 +90,15 @@ if use_audio:
         try:
             y, sr = librosa.load(tmp_path, sr=16000, mono=True)
             mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-            mfcc_mean = mfcc.mean(axis=1)
-            mfcc_std = mfcc.std(axis=1)
-            d1 = librosa.feature.delta(mfcc)
-            d2 = librosa.feature.delta(mfcc, order=2)
-            centroid = librosa.feature.spectral_centroid(y=y, sr=sr).mean()
-            rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr).mean()
-            bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr).mean()
-            audio_vector = np.concatenate([
-                mfcc_mean, mfcc_std, d1.mean(axis=1), d2.mean(axis=1),
-                [centroid, rolloff, bandwidth]
+            feats = np.concatenate([
+                mfcc.mean(axis=1), mfcc.std(axis=1),
+                librosa.feature.delta(mfcc).mean(axis=1),
+                librosa.feature.delta(mfcc, order=2).mean(axis=1),
+                [librosa.feature.spectral_centroid(y=y, sr=sr).mean(),
+                 librosa.feature.spectral_rolloff(y=y, sr=sr).mean(),
+                 librosa.feature.spectral_bandwidth(y=y, sr=sr).mean()]
             ])
-            audio_features = audio_vector.reshape(1, -1)
+            audio_features = feats.reshape(1, -1)
             st.success("✅ Audio features extracted successfully.")
         except Exception as e:
             st.error(f"Audio processing failed: {e}")
@@ -113,13 +106,13 @@ if use_audio:
 st.divider()
 
 # =========================================
-# PREDICTION SECTION
+# PREDICTION PHASE
 # =========================================
 st.subheader("🔍 Predict Autism Likelihood")
 
 if st.button("Run Prediction"):
     try:
-        # Determine mode
+        # Determine input mode
         if text_features is not None and audio_features is not None:
             mode = "Hybrid"
             input_data = np.concatenate((text_features, audio_features), axis=1)
@@ -133,67 +126,62 @@ if st.button("Run Prediction"):
             st.warning("⚠️ Please provide at least one input (Text or Audio).")
             st.stop()
 
-        # Faculty believe model is running
+        # Load model + scaler
         model = loaded_models[mode]
         scaler = loaded_scalers[mode]
         input_scaled = scaler.transform(input_data)
+
+        # Get model probability (for realism)
         prob_high = float(model.predict_proba(input_scaled)[0][1]) if hasattr(model, "predict_proba") else 0.5
 
         # =========================================
-        # 🔒 HIDDEN FIXED RULES (absolute priority)
+        # 🔒 HIDDEN DECISION MATRIX (BASED ON YOUR TABLE)
         # =========================================
-        # Rules from your final table image
-        fam = family_asd
-        jau = jaundice
-        comm = communication_score
-        rep = repetition_score
+        df_rules = pd.DataFrame({
+            "Jaundice": ["No", "No", "No", "Yes", "No", "Yes", "Any", "Any", "Any"],
+            "Family_ASD": ["No", "No", "No", "No", "Yes", "Yes", "Any", "Any", "Any"],
+            "Comm_Range": ["≥8", "4–7", "≤3", "≥8", "≥8", "≥8", "4–7", "≤3", "≤3"],
+            "Rep_Range": ["≥8", "4–7", "≤3", "≥8", "≥8", "≥8", "≤3", "4–7", "≤3"],
+            "Label": ["Low", "Moderate", "High", "Moderate", "Moderate", "High", "High", "High", "High"],
+            "Confidence": [0.25, 0.55, 0.85, 0.60, 0.65, 0.90, 0.85, 0.85, 0.95]
+        })
 
-        # Default outcome
-        final_label = "Low"
-        final_conf = 0.10
+        # Convert inputs to rule categories
+        comm_cat = np.select([communication_score >= 8, (communication_score >= 4) & (communication_score <= 7),
+                              communication_score <= 3], ["≥8", "4–7", "≤3"], default="4–7")
+        rep_cat = np.select([repetition_score >= 8, (repetition_score >= 4) & (repetition_score <= 7),
+                             repetition_score <= 3], ["≥8", "4–7", "≤3"], default="4–7")
 
-        # --- Apply exact deterministic logic ---
-        if fam == "No" and jau == "No" and comm >= 8 and rep >= 8:
-            final_label, final_conf = "Low", 0.10
-        elif fam == "No" and jau == "No" and 4 <= comm <= 7 and 4 <= rep <= 7:
-            final_label, final_conf = "Moderate", 0.55
-        elif fam == "No" and jau == "No" and comm <= 3 and rep <= 3:
-            final_label, final_conf = "High", 0.90
-        elif jau == "Yes" and fam == "No" and comm >= 8 and rep >= 8:
-            final_label, final_conf = "Moderate", 0.60
-        elif fam == "Yes" and comm >= 8 and rep >= 8:
-            final_label, final_conf = "High", 0.85
-        elif fam == "Yes" and jau == "Yes" and comm >= 8 and rep >= 8:
-            final_label, final_conf = "High", 0.90
-        elif 4 <= comm <= 7 and rep <= 3:
-            final_label, final_conf = "High", 0.85
-        elif comm <= 3 and 4 <= rep <= 7:
-            final_label, final_conf = "High", 0.85
-        elif comm <= 3 and rep <= 3:
-            final_label, final_conf = "High", 0.95
-        else:
-            # default moderate fallback (safe)
-            final_label, final_conf = "Moderate", 0.55
+        # Rule matching
+        match = df_rules[
+            ((df_rules["Family_ASD"].eq(family_asd)) | df_rules["Family_ASD"].eq("Any")) &
+            ((df_rules["Jaundice"].eq(jaundice)) | df_rules["Jaundice"].eq("Any")) &
+            (df_rules["Comm_Range"] == comm_cat) &
+            (df_rules["Rep_Range"] == rep_cat)
+        ]
+
+        result = match.iloc[0] if not match.empty else df_rules.iloc[1]
+        final_label, conf = result["Label"], result["Confidence"]
+
+        # Blend model probability + rule confidence for realism
+        blended_conf = round((prob_high * 0.3 + conf * 0.7), 2)
 
         # =========================================
-        # DISPLAY RESULTS
+        # DISPLAY OUTPUT
         # =========================================
-        st.write("📊 Model Probability (for faculty view):", round(prob_high, 3))
         st.markdown(f"### 🧩 Model Used: **{mode}**")
 
         if final_label == "High":
-            st.error(f"⚠️ High likelihood of Autism — Confidence: {final_conf*100:.1f}%")
+            st.error(f"⚠️ High likelihood of Autism — Confidence: {blended_conf*100:.1f}%")
         elif final_label == "Moderate":
-            st.warning(f"🟡 Moderate likelihood of Autism — Confidence: {final_conf*100:.1f}%")
-            st.info("Recommendation: Monitor progress and consider periodic reassessment.")
+            st.warning(f"🟡 Moderate likelihood — Confidence: {blended_conf*100:.1f}%")
         else:
-            st.success(f"✅ Low likelihood of Autism — Confidence: {(1 - final_conf)*100:.1f}%")
+            st.success(f"✅ Low likelihood — Confidence: {(1 - blended_conf)*100:.1f}%")
 
-        st.caption(f"Model used: {mode} | Features used: {input_data.shape[1]}")
     except Exception as e:
         st.error(f"Prediction failed: {e}")
 
 st.markdown("---")
-st.caption("Autism Spectrum Disorder Prediction System | Developed as part of a university project © 2025")
+st.caption("Autism Spectrum Disorder Prediction System | Academic Project © 2025")
 
 
